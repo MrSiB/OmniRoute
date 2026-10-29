@@ -123,11 +123,7 @@ test("Ultra plan: Argon requests fall back to gemini_weekly when dedicated Argon
     true,
     "Argon must fall back to gemini_weekly and be marked exhausted on Ultra plans when Gemini is 0%"
   );
-  assert.equal(
-    flashExhausted,
-    true,
-    "Gemini models are also exhausted when gemini_weekly is 0%"
-  );
+  assert.equal(flashExhausted, true, "Gemini models are also exhausted when gemini_weekly is 0%");
 });
 
 test("Ultra plan: Argon requests remain available when gemini_weekly has remaining quota and do not leak into claude_gpt_weekly", () => {

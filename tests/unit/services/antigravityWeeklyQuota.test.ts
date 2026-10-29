@@ -136,18 +136,12 @@ test("parseAntigravityWeeklyQuotas normalizes varied Argon group names and falls
 
   assert.equal(variedQuotas.gemini_4_argon_weekly?.remainingPercentage, 40);
   assert.equal(variedQuotas.argon_weekly?.remainingPercentage, 40);
-  assert.equal(
-    variedQuotas.gemini_4_argon_weekly?.resetAt,
-    "2026-10-29T00:00:00.000Z"
-  );
+  assert.equal(variedQuotas.gemini_4_argon_weekly?.resetAt, "2026-10-29T00:00:00.000Z");
 
   assert.equal(bucketFallbackQuotas.gemini_4_argon_weekly?.remainingPercentage, 25);
   assert.equal(bucketFallbackQuotas.argon_weekly?.remainingPercentage, 25);
   assert.equal(bucketFallbackQuotas.gemini_4_argon_weekly?.used, 750);
-  assert.equal(
-    bucketFallbackQuotas.gemini_4_argon_weekly?.resetAt,
-    "2026-10-30T00:00:00.000Z"
-  );
+  assert.equal(bucketFallbackQuotas.gemini_4_argon_weekly?.resetAt, "2026-10-30T00:00:00.000Z");
 });
 
 test("detectAntigravityArgonEligibility returns true for Argon-entitled accounts", () => {
@@ -248,7 +242,8 @@ test("parseAntigravityQuotaSummary distinguishes Pro plan with Argon group vs Ul
       },
       {
         displayName: "Gemini 4 Argon",
-        description: "For paid Pro plans, Argon quota is separate. Higher Argon quota (included as part of the larger Gemini quota bucket) is available on Ultra plans.",
+        description:
+          "For paid Pro plans, Argon quota is separate. Higher Argon quota (included as part of the larger Gemini quota bucket) is available on Ultra plans.",
         buckets: [
           {
             bucketId: "gemini-argon-wtu-weekly",
@@ -292,10 +287,8 @@ test("parseAntigravityQuotaSummary distinguishes Pro plan with Argon group vs Ul
 });
 
 test("fetchAndParseAntigravityWeeklyQuotas and fetchAndParseAntigravityQuotaSummary handle network responses and fallback group IDs", async () => {
-  const {
-    fetchAndParseAntigravityWeeklyQuotas,
-    fetchAndParseAntigravityQuotaSummary,
-  } = await import("../../../open-sse/services/usage/antigravityWeeklyQuota.ts");
+  const { fetchAndParseAntigravityWeeklyQuotas, fetchAndParseAntigravityQuotaSummary } =
+    await import("../../../open-sse/services/usage/antigravityWeeklyQuota.ts");
 
   const originalFetch = globalThis.fetch;
   try {

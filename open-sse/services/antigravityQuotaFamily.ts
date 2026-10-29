@@ -82,13 +82,9 @@ export function quotaWindowNamesForScope(
   if (!scope?.requestedModel || !isAntigravityQuotaProvider(scope.provider)) return names;
   const scoped = selectAntigravityQuotaWindowNames(names, scope.requestedModel);
   if (scoped.length > 0) return scoped;
-  if (
-    getAntigravityQuotaFamily(scope.requestedModel) === "argon" ||
-    getAntigravityQuotaFamily(scope.requestedModel) === "gemini" ||
-    getAntigravityQuotaFamily(scope.requestedModel) === "claude"
-  ) {
-    return [];
-  }
+  // Argon has its own pool: a window set with neither Argon nor Gemini buckets says nothing
+  // about it, so scan none (fail open). Gemini and Claude keep the shipped all-windows fallback.
+  if (getAntigravityQuotaFamily(scope.requestedModel) === "argon") return [];
   return names;
 }
 
@@ -123,8 +119,27 @@ export function remainingPercentFromQuotaWindows(
     minRemaining = minRemaining === null ? remaining : Math.min(minRemaining, remaining);
   }
   if (minRemaining !== null) return minRemaining;
-  if (scope?.requestedModel && names.length > 0) return 100;
+  if (scope?.requestedModel && namesToScan !== names) return 100;
   return null;
+}
+
+const FAMILY_AGGREGATE_WINDOWS: Record<AntigravityQuotaFamily, string[]> = {
+  gemini: ["gemini_session", "gemini_weekly"],
+  claude: ["claude_gpt_session", "claude_gpt_weekly"],
+  argon: ["gemini_4_argon_weekly", "argon_weekly"],
+  other: [],
+};
+
+/**
+ * Argon with no dedicated Argon window (e.g. Ultra plans) draws from the Gemini pool:
+ * prefer the Gemini aggregates, then any Gemini-family window.
+ */
+function argonFallbackWindowNames(quotaNames: string[]): string[] {
+  const geminiAggregates = FAMILY_AGGREGATE_WINDOWS.gemini.filter((key) =>
+    quotaNames.includes(key)
+  );
+  if (geminiAggregates.length > 0) return geminiAggregates;
+  return quotaNames.filter((windowName) => getAntigravityQuotaFamily(windowName) === "gemini");
 }
 
 /**
@@ -149,14 +164,7 @@ export function selectAntigravityQuotaWindowNames(
     });
   }
 
-  const familyAggregates =
-    requestedFamily === "gemini"
-      ? ["gemini_session", "gemini_weekly"]
-      : requestedFamily === "claude"
-        ? ["claude_gpt_session", "claude_gpt_weekly"]
-        : requestedFamily === "argon"
-          ? ["gemini_4_argon_weekly", "argon_weekly"]
-          : [];
+  const familyAggregates = FAMILY_AGGREGATE_WINDOWS[requestedFamily];
 
   let exactWindows = quotaNames.filter((windowName) => {
     const bare = windowName.replace(/^(antigravity|agy)\//, "");
@@ -182,15 +190,7 @@ export function selectAntigravityQuotaWindowNames(
   const aggregateWindows = familyAggregates.filter((key) => quotaNames.includes(key));
   const scoped = [...exactWindows, ...aggregateWindows];
   if (scoped.length > 0) return scoped;
-  if (requestedFamily === "argon") {
-    const geminiAggregates = ["gemini_session", "gemini_weekly"].filter((key) =>
-      quotaNames.includes(key)
-    );
-    if (geminiAggregates.length > 0) return geminiAggregates;
-    return quotaNames.filter(
-      (windowName) => getAntigravityQuotaFamily(windowName) === "gemini"
-    );
-  }
+  if (requestedFamily === "argon") return argonFallbackWindowNames(quotaNames);
 
   return quotaNames.filter(
     (windowName) => getAntigravityQuotaFamily(windowName) === requestedFamily

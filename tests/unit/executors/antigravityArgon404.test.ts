@@ -11,12 +11,10 @@ process.env.API_KEY_SECRET = "test-argon-404-secret";
 const core = await import("../../../src/lib/db/core.ts");
 const { AntigravityExecutor } = await import("../../../open-sse/executors/antigravity.ts");
 const { markAccountUnavailable } = await import("../../../src/sse/services/auth.ts");
-const { createProviderConnection, getProviderConnectionById } = await import(
-  "../../../src/lib/db/providers.ts"
-);
-const { isModelLocked, clearAllModelLockouts } = await import(
-  "../../../open-sse/services/accountFallback.ts"
-);
+const { createProviderConnection, getProviderConnectionById } =
+  await import("../../../src/lib/db/providers.ts");
+const { isModelLocked, clearAllModelLockouts } =
+  await import("../../../open-sse/services/accountFallback.ts");
 
 test.after(() => {
   core.resetDbInstance();

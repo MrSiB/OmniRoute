@@ -110,6 +110,19 @@ function extractSummaryGroups(summaryData: unknown): unknown[] {
 const ARGON_GROUP_PATTERN = /\bargon\b|\bgemini[\s_-]*4\b/i;
 const ARGON_BUCKET_PATTERN = /\bargon\b|gemini-argon-wtu-weekly/i;
 
+function isArgonBucket(rawBucket: unknown): boolean {
+  if (!rawBucket || typeof rawBucket !== "object") return false;
+  const bucket = toRecord(rawBucket);
+  return ARGON_BUCKET_PATTERN.test(
+    `${String(bucket.bucketId || "")} ${String(bucket.displayName || "")}`
+  );
+}
+
+function isArgonGroup(text: string, buckets?: unknown[]): boolean {
+  if (ARGON_GROUP_PATTERN.test(text)) return true;
+  return Array.isArray(buckets) && buckets.some(isArgonBucket);
+}
+
 function normalizeGroup(
   displayName: unknown,
   id: unknown,
@@ -120,16 +133,7 @@ function normalizeGroup(
 } | null {
   const rawDisplay = String(displayName || id || "").trim();
   const text = `${String(id || "")} ${String(displayName || "")}`.toLowerCase();
-  const hasArgonBucket =
-    Array.isArray(buckets) &&
-    buckets.some((rawBucket) => {
-      if (!rawBucket || typeof rawBucket !== "object") return false;
-      const bucket = toRecord(rawBucket);
-      return ARGON_BUCKET_PATTERN.test(
-        `${String(bucket.bucketId || "")} ${String(bucket.displayName || "")}`
-      );
-    });
-  if (ARGON_GROUP_PATTERN.test(text) || hasArgonBucket) {
+  if (isArgonGroup(text, buckets)) {
     return {
       id: "gemini_4_argon",
       displayName: rawDisplay || "Gemini 4 Argon",
@@ -208,10 +212,7 @@ function toQuotaWindow(
   // retrieveUserQuota's flat bucket shape. Accept both so an upstream envelope change
   // cannot silently erase every family window from Provider Quota.
   const remainingData = toRecord(bucket.remaining);
-  const rawFraction = toNumber(
-    remainingData.remainingFraction ?? bucket.remainingFraction,
-    -1
-  );
+  const rawFraction = toNumber(remainingData.remainingFraction ?? bucket.remainingFraction, -1);
   if (rawFraction < 0) return null;
 
   const remainingFraction = Math.max(0, Math.min(1, rawFraction));
@@ -234,6 +235,28 @@ function toQuotaWindow(
   };
 }
 
+/** Parse one group's buckets into its windows, also projecting them into the flat `quotas` map. */
+function collectGroupWindows(
+  groupId: AntigravityQuotaGroupId,
+  buckets: unknown[],
+  quotas: Record<string, AntigravityQuotaWindow>
+): AntigravityQuotaGroup["windows"] {
+  const windows: AntigravityQuotaGroup["windows"] = {};
+  for (const rawBucket of buckets) {
+    const bucket = toRecord(rawBucket);
+    const window = normalizeAntigravityQuotaWindow(bucket);
+    if (!window || windows[window]) continue;
+    const parsed = toQuotaWindow(groupId, window, bucket);
+    if (!parsed) continue;
+    windows[window] = parsed;
+    quotas[`${groupId}_${window}`] = parsed;
+    if (groupId === "gemini_4_argon" && window === "weekly") {
+      quotas.argon_weekly = { ...parsed };
+    }
+  }
+  return windows;
+}
+
 /** Parse all supported family/window buckets, preserving the group structure and flat projection. */
 export function parseAntigravityQuotaSummary(
   summaryData: unknown,
@@ -249,19 +272,7 @@ export function parseAntigravityQuotaSummary(
     const normalized = normalizeGroup(group.displayName, group.groupId ?? group.id, buckets);
     if (!normalized) continue;
 
-    const windows: AntigravityQuotaGroup["windows"] = {};
-    for (const rawBucket of buckets) {
-      const bucket = toRecord(rawBucket);
-      const window = normalizeAntigravityQuotaWindow(bucket);
-      if (!window || windows[window]) continue;
-      const parsed = toQuotaWindow(normalized.id, window, bucket);
-      if (!parsed) continue;
-      windows[window] = parsed;
-      quotas[`${normalized.id}_${window}`] = parsed;
-      if (normalized.id === "gemini_4_argon" && window === "weekly") {
-        quotas.argon_weekly = { ...parsed };
-      }
-    }
+    const windows = collectGroupWindows(normalized.id, buckets, quotas);
 
     if (Object.keys(windows).length > 0) {
       groups.push({ ...normalized, windows, models: [] });

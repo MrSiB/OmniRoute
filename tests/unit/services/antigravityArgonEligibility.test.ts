@@ -8,73 +8,8 @@ import { isModelExcludedByConnection } from "../../../src/domain/connectionModel
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-let applyAntigravityArgonEligibilityToPsd: (
-  psd: Record<string, unknown>,
-  hasArgon: unknown
-) => { nextPsd: Record<string, unknown>; changed: boolean };
-
-try {
-  const mod = await import("../../../src/lib/usage/providerLimits.ts");
-  applyAntigravityArgonEligibilityToPsd = mod.applyAntigravityArgonEligibilityToPsd;
-} catch {
-  const AUTO_MANAGED_ARGON_EXCLUSION_PATTERNS = ["gemini-4*", "*argon*"] as const;
-  applyAntigravityArgonEligibilityToPsd = (psd, hasArgon) => {
-    if (typeof hasArgon !== "boolean") {
-      return { nextPsd: { ...psd }, changed: false };
-    }
-
-    const nextPsd: Record<string, unknown> = { ...psd };
-    let changed = false;
-
-    if (hasArgon === false) {
-      if (psd.hasArgon !== false) {
-        nextPsd.hasArgon = false;
-        changed = true;
-      }
-
-      const existing = Array.isArray(psd.excludedModels)
-        ? psd.excludedModels.filter((m): m is string => typeof m === "string")
-        : [];
-      const merged = [...existing];
-      let modelsAdded = false;
-
-      for (const pattern of AUTO_MANAGED_ARGON_EXCLUSION_PATTERNS) {
-        if (!merged.includes(pattern)) {
-          merged.push(pattern);
-          modelsAdded = true;
-        }
-      }
-
-      if (modelsAdded) {
-        nextPsd.excludedModels = merged;
-        changed = true;
-      }
-    } else {
-      if (psd.hasArgon !== true) {
-        nextPsd.hasArgon = true;
-        changed = true;
-      }
-
-      if (!psd.connectionTestModel) {
-        nextPsd.connectionTestModel = "gemini-4-argon";
-        changed = true;
-      }
-
-      if (Array.isArray(psd.excludedModels)) {
-        const autoSet = new Set<string>(AUTO_MANAGED_ARGON_EXCLUSION_PATTERNS);
-        const filtered = psd.excludedModels.filter(
-          (m) => typeof m !== "string" || !autoSet.has(m)
-        );
-        if (filtered.length !== psd.excludedModels.length) {
-          nextPsd.excludedModels = filtered;
-          changed = true;
-        }
-      }
-    }
-
-    return { nextPsd, changed };
-  };
-}
+const { applyAntigravityArgonEligibilityToPsd } =
+  await import("../../../src/lib/usage/providerLimits.ts");
 
 test("src/lib/usage/providerLimits.ts: statically exports applyAntigravityArgonEligibilityToPsd", () => {
   const providerLimitsSource = readFileSync(
@@ -125,14 +60,10 @@ test("applyAntigravityArgonEligibilityToPsd: when hasArgon is false is idempoten
 
   assert.equal(result.changed, false);
   assert.equal(result.nextPsd.hasArgon, false);
-  assert.deepEqual(result.nextPsd.excludedModels, [
-    "claude-3-haiku*",
-    "gemini-4*",
-    "*argon*",
-  ]);
+  assert.deepEqual(result.nextPsd.excludedModels, ["claude-3-haiku*", "gemini-4*", "*argon*"]);
 });
 
-test("applyAntigravityArgonEligibilityToPsd: when hasArgon is true strips auto-managed patterns and sets connectionTestModel", () => {
+test("applyAntigravityArgonEligibilityToPsd: when hasArgon is true strips auto-managed patterns", () => {
   const psd = {
     hasArgon: false,
     excludedModels: ["claude-3-haiku*", "gemini-4*", "*argon*"],
@@ -141,8 +72,25 @@ test("applyAntigravityArgonEligibilityToPsd: when hasArgon is true strips auto-m
 
   assert.equal(result.changed, true);
   assert.equal(result.nextPsd.hasArgon, true);
-  assert.equal(result.nextPsd.connectionTestModel, "gemini-4-argon");
   assert.deepEqual(result.nextPsd.excludedModels, ["claude-3-haiku*"]);
+});
+
+test("applyAntigravityArgonEligibilityToPsd: never writes the user-facing connectionTestModel setting", () => {
+  // connectionTestModel is an operator setting read by the provider test-message route;
+  // a quota sync must not silently pick it for the user.
+  const unset = applyAntigravityArgonEligibilityToPsd({}, true);
+  assert.equal(unset.changed, true);
+  assert.equal("connectionTestModel" in unset.nextPsd, false);
+
+  const userChosen = applyAntigravityArgonEligibilityToPsd(
+    { hasArgon: true, connectionTestModel: "gemini-3.8-flash" },
+    true
+  );
+  assert.equal(userChosen.changed, false);
+  assert.equal(userChosen.nextPsd.connectionTestModel, "gemini-3.8-flash");
+
+  const ineligible = applyAntigravityArgonEligibilityToPsd({}, false);
+  assert.equal("connectionTestModel" in ineligible.nextPsd, false);
 });
 
 test("applyAntigravityArgonEligibilityToPsd: when hasArgon is true is idempotent", () => {
@@ -178,7 +126,10 @@ test("isModelExcludedByConnection: integrates correctly with applyAntigravityArg
 
   assert.equal(isModelExcludedByConnection("gemini-4-argon", ineligiblePsd), true);
   assert.equal(isModelExcludedByConnection("gemini-4-argon-high", ineligiblePsd), true);
-  assert.equal(isModelExcludedByConnection("antigravity/gemini-4-argon-medium", ineligiblePsd), true);
+  assert.equal(
+    isModelExcludedByConnection("antigravity/gemini-4-argon-medium", ineligiblePsd),
+    true
+  );
 
   assert.equal(isModelExcludedByConnection("gemini-3.8-flash", ineligiblePsd), false);
   assert.equal(isModelExcludedByConnection("gemini-2.5-pro", ineligiblePsd), false);
@@ -189,7 +140,10 @@ test("isModelExcludedByConnection: integrates correctly with applyAntigravityArg
 
   assert.equal(isModelExcludedByConnection("gemini-4-argon", eligiblePsd), false);
   assert.equal(isModelExcludedByConnection("gemini-4-argon-high", eligiblePsd), false);
-  assert.equal(isModelExcludedByConnection("antigravity/gemini-4-argon-medium", eligiblePsd), false);
+  assert.equal(
+    isModelExcludedByConnection("antigravity/gemini-4-argon-medium", eligiblePsd),
+    false
+  );
 
   assert.equal(isModelExcludedByConnection("claude-3-haiku-20240307", eligiblePsd), true);
 });

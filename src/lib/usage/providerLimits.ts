@@ -719,64 +719,98 @@ async function syncClaudeExtraUsageStateIfNeeded(
 
 const AUTO_MANAGED_ARGON_EXCLUSION_PATTERNS = ["gemini-4*", "*argon*"] as const;
 
+/** Ineligible: flag the account and append the auto-managed Argon exclusions (keeps operator ones). */
+function markArgonIneligible(
+  psd: Record<string, unknown>,
+  nextPsd: Record<string, unknown>
+): boolean {
+  let changed = false;
+  if (psd.hasArgon !== false) {
+    nextPsd.hasArgon = false;
+    changed = true;
+  }
+
+  const existing = Array.isArray(psd.excludedModels)
+    ? psd.excludedModels.filter((m): m is string => typeof m === "string")
+    : [];
+  const missing = AUTO_MANAGED_ARGON_EXCLUSION_PATTERNS.filter(
+    (pattern) => !existing.includes(pattern)
+  );
+  if (missing.length > 0) {
+    nextPsd.excludedModels = [...existing, ...missing];
+    changed = true;
+  }
+  return changed;
+}
+
+/** Eligible: flag the account and strip only the auto-managed Argon exclusions. */
+function markArgonEligible(
+  psd: Record<string, unknown>,
+  nextPsd: Record<string, unknown>
+): boolean {
+  let changed = false;
+  if (psd.hasArgon !== true) {
+    nextPsd.hasArgon = true;
+    changed = true;
+  }
+
+  if (!Array.isArray(psd.excludedModels)) return changed;
+  const autoSet = new Set<string>(AUTO_MANAGED_ARGON_EXCLUSION_PATTERNS);
+  const filtered = psd.excludedModels.filter((m) => typeof m !== "string" || !autoSet.has(m));
+  if (filtered.length !== psd.excludedModels.length) {
+    nextPsd.excludedModels = filtered;
+    changed = true;
+  }
+  return changed;
+}
+
 export function applyAntigravityArgonEligibilityToPsd(
   psd: Record<string, unknown>,
   hasArgon: unknown
 ): { nextPsd: Record<string, unknown>; changed: boolean } {
-  if (typeof hasArgon !== "boolean") {
-    return { nextPsd: { ...psd }, changed: false };
-  }
-
   const nextPsd: Record<string, unknown> = { ...psd };
+  if (typeof hasArgon !== "boolean") return { nextPsd, changed: false };
+  const changed = hasArgon ? markArgonEligible(psd, nextPsd) : markArgonIneligible(psd, nextPsd);
+  return { nextPsd, changed };
+}
+
+/** Copy tier, plan and a newly discovered projectId from loadCodeAssist into nextPsd. */
+function applyAntigravitySubscriptionInfoToPsd(
+  connection: ProviderConnectionLike,
+  usage: JsonRecord,
+  psd: JsonRecord,
+  nextPsd: JsonRecord
+): { changed: boolean; nextProjectId?: string } {
+  const subscriptionInfo = usage.subscriptionInfo;
   let changed = false;
 
-  if (hasArgon === false) {
-    if (psd.hasArgon !== false) {
-      nextPsd.hasArgon = false;
-      changed = true;
-    }
-
-    const existing = Array.isArray(psd.excludedModels)
-      ? psd.excludedModels.filter((m): m is string => typeof m === "string")
-      : [];
-    const merged = [...existing];
-    let modelsAdded = false;
-
-    for (const pattern of AUTO_MANAGED_ARGON_EXCLUSION_PATTERNS) {
-      if (!merged.includes(pattern)) {
-        merged.push(pattern);
-        modelsAdded = true;
-      }
-    }
-
-    if (modelsAdded) {
-      nextPsd.excludedModels = merged;
-      changed = true;
-    }
-  } else {
-    if (psd.hasArgon !== true) {
-      nextPsd.hasArgon = true;
-      changed = true;
-    }
-
-    if (!psd.connectionTestModel) {
-      nextPsd.connectionTestModel = "gemini-4-argon";
-      changed = true;
-    }
-
-    if (Array.isArray(psd.excludedModels)) {
-      const autoSet = new Set<string>(AUTO_MANAGED_ARGON_EXCLUSION_PATTERNS);
-      const filtered = psd.excludedModels.filter(
-        (m) => typeof m !== "string" || !autoSet.has(m)
-      );
-      if (filtered.length !== psd.excludedModels.length) {
-        nextPsd.excludedModels = filtered;
-        changed = true;
-      }
-    }
+  const tierId = extractCodeAssistOnboardTierId(subscriptionInfo);
+  if (tierId && tierId !== "legacy-tier" && psd.tier !== tierId) {
+    nextPsd.tier = tierId;
+    changed = true;
   }
 
-  return { nextPsd, changed };
+  const subscriptionTier = extractCodeAssistSubscriptionTier(subscriptionInfo);
+  if (subscriptionTier && psd.subscriptionTier !== subscriptionTier) {
+    nextPsd.subscriptionTier = subscriptionTier;
+    changed = true;
+  }
+
+  const plan = typeof usage.plan === "string" ? usage.plan.trim() : "";
+  if (plan && psd.plan !== plan) {
+    nextPsd.plan = plan;
+    changed = true;
+  }
+
+  const discoveredProjectId = extractAntigravityProjectIdFromPayload(
+    subscriptionInfo as Record<string, unknown>
+  );
+  const storedProjectId = getStoredAntigravityProjectId(connection);
+  if (discoveredProjectId && !storedProjectId) {
+    nextPsd.projectId = discoveredProjectId;
+    return { changed: true, nextProjectId: discoveredProjectId };
+  }
+  return { changed };
 }
 
 /** Persist Antigravity tier from live loadCodeAssist and Argon eligibility on quota refresh (not only OAuth). */
@@ -785,44 +819,15 @@ async function syncAntigravitySubscriptionIfNeeded(
   usage: JsonRecord
 ): Promise<ProviderConnectionLike> {
   if (connection.provider !== "antigravity" && connection.provider !== "agy") return connection;
-
-  const subscriptionInfo = usage.subscriptionInfo;
-  if (!subscriptionInfo && typeof usage.hasArgon !== "boolean") return connection;
+  if (!usage.subscriptionInfo && typeof usage.hasArgon !== "boolean") return connection;
 
   const psd = (connection.providerSpecificData || {}) as JsonRecord;
   let nextPsd: JsonRecord = { ...psd };
-  let changed = false;
-  let nextProjectId: string | undefined;
-
-  if (subscriptionInfo) {
-    const tierId = extractCodeAssistOnboardTierId(subscriptionInfo);
-    if (tierId && tierId !== "legacy-tier" && psd.tier !== tierId) {
-      nextPsd.tier = tierId;
-      changed = true;
-    }
-
-    const subscriptionTier = extractCodeAssistSubscriptionTier(subscriptionInfo);
-    if (subscriptionTier && psd.subscriptionTier !== subscriptionTier) {
-      nextPsd.subscriptionTier = subscriptionTier;
-      changed = true;
-    }
-
-    const plan = typeof usage.plan === "string" ? usage.plan.trim() : "";
-    if (plan && psd.plan !== plan) {
-      nextPsd.plan = plan;
-      changed = true;
-    }
-
-    const discoveredProjectId = extractAntigravityProjectIdFromPayload(
-      subscriptionInfo as Record<string, unknown>
-    );
-    const storedProjectId = getStoredAntigravityProjectId(connection);
-    if (discoveredProjectId && !storedProjectId) {
-      nextPsd.projectId = discoveredProjectId;
-      nextProjectId = discoveredProjectId;
-      changed = true;
-    }
-  }
+  const subscriptionResult = usage.subscriptionInfo
+    ? applyAntigravitySubscriptionInfoToPsd(connection, usage, psd, nextPsd)
+    : { changed: false };
+  let changed = subscriptionResult.changed;
+  const nextProjectId = subscriptionResult.nextProjectId;
 
   if (typeof usage.hasArgon === "boolean") {
     const argonResult = applyAntigravityArgonEligibilityToPsd(nextPsd, usage.hasArgon);
@@ -1067,9 +1072,9 @@ async function fetchLiveProviderLimitsWithOptions(
           allowRotatingRefresh: true,
           force: true,
         });
-        if (forced.refreshed) {
+        if (forced.refreshed || forced.adopted) {
           conn = forced.connection;
-          await syncToCloudIfEnabled();
+          if (forced.refreshed) await syncToCloudIfEnabled();
           usageData = sanitizeUsageQuotasForProvider(
             conn.provider,
             (await getUsageForProvider(conn as unknown as JsonRecord, options)) as JsonRecord,

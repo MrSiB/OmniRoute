@@ -28,10 +28,10 @@ test("selectAntigravityQuotaWindowNames includes gemini_4_argon_weekly and argon
     "argon_weekly",
   ];
 
-  assert.deepEqual(
-    selectAntigravityQuotaWindowNames(quotaNames, "gemini-4-argon"),
-    ["gemini_4_argon_weekly", "argon_weekly"]
-  );
+  assert.deepEqual(selectAntigravityQuotaWindowNames(quotaNames, "gemini-4-argon"), [
+    "gemini_4_argon_weekly",
+    "argon_weekly",
+  ]);
   assert.deepEqual(
     selectAntigravityQuotaWindowNames(quotaNames, "antigravity/gemini-4-argon-high"),
     ["gemini_4_argon_weekly", "argon_weekly"]
@@ -80,14 +80,13 @@ test("selectAntigravityQuotaWindowNames isolates Gemini and Claude requests from
     "argon_weekly",
   ];
 
-  assert.deepEqual(
-    selectAntigravityQuotaWindowNames(quotaNames, "antigravity/gemini-3.8-flash"),
-    ["gemini-3.8-flash-tiered", "gemini_weekly"]
-  );
-  assert.deepEqual(
-    selectAntigravityQuotaWindowNames(quotaNames, "antigravity/claude-sonnet-4-5"),
-    ["claude_gpt_weekly"]
-  );
+  assert.deepEqual(selectAntigravityQuotaWindowNames(quotaNames, "antigravity/gemini-3.8-flash"), [
+    "gemini-3.8-flash-tiered",
+    "gemini_weekly",
+  ]);
+  assert.deepEqual(selectAntigravityQuotaWindowNames(quotaNames, "antigravity/claude-sonnet-4-5"), [
+    "claude_gpt_weekly",
+  ]);
 });
 
 test("remainingPercentFromQuotaWindows computes Argon remaining percent from gemini_4_argon_weekly", () => {
@@ -144,8 +143,8 @@ test("quota scoping and helpers handle non-Antigravity providers and other model
   assert.equal(finitePercentUsed(NaN), null);
 
   const windows = {
-    "gemini_weekly": { percentUsed: 0.5 },
-    "claude_gpt_weekly": { percentUsed: null },
+    gemini_weekly: { percentUsed: 0.5 },
+    claude_gpt_weekly: { percentUsed: null },
   };
   assert.equal(
     remainingPercentFromQuotaWindows(windows, {
@@ -155,20 +154,22 @@ test("quota scoping and helpers handle non-Antigravity providers and other model
     100
   );
   assert.equal(
-    remainingPercentFromQuotaWindows({}, {
-      provider: "antigravity",
-      requestedModel: "antigravity/gemini-3.8-flash",
-    }),
+    remainingPercentFromQuotaWindows(
+      {},
+      {
+        provider: "antigravity",
+        requestedModel: "antigravity/gemini-3.8-flash",
+      }
+    ),
     null
   );
 });
 
 test("selectAntigravityQuotaWindowNames handles exact model match and other family", () => {
   const otherWindows = ["custom-model-v1", "gemini_weekly"];
-  assert.deepEqual(
-    selectAntigravityQuotaWindowNames(otherWindows, "antigravity/custom-model-v1"),
-    ["custom-model-v1"]
-  );
+  assert.deepEqual(selectAntigravityQuotaWindowNames(otherWindows, "antigravity/custom-model-v1"), [
+    "custom-model-v1",
+  ]);
 
   assert.deepEqual(selectAntigravityQuotaWindowNames(otherWindows, null), otherWindows);
 
@@ -176,5 +177,40 @@ test("selectAntigravityQuotaWindowNames handles exact model match and other fami
   assert.deepEqual(
     selectAntigravityQuotaWindowNames(familyOnlyWindows, "antigravity/gemini-3.8-flash"),
     familyOnlyWindows
+  );
+});
+
+test("quotaWindowNamesForScope keeps the shipped all-windows fallback for Gemini and Claude (only Argon fails open)", () => {
+  const geminiOnly = ["gemini_weekly", "gemini_session"];
+  const scopedClaude = quotaWindowNamesForScope(geminiOnly, {
+    provider: "antigravity",
+    requestedModel: "antigravity/claude-sonnet-4-5",
+  });
+  assert.equal(scopedClaude, geminiOnly);
+
+  const claudeOnly = ["claude_gpt_weekly"];
+  assert.equal(
+    quotaWindowNamesForScope(claudeOnly, {
+      provider: "antigravity",
+      requestedModel: "antigravity/gemini-3.8-flash",
+    }),
+    claudeOnly
+  );
+  assert.equal(
+    remainingPercentFromQuotaWindows(
+      { claude_gpt_weekly: { percentUsed: 0.5 } },
+      { provider: "antigravity", requestedModel: "antigravity/gemini-3.8-flash" }
+    ),
+    50
+  );
+});
+
+test("remainingPercentFromQuotaWindows stays unknown (null) for unreported windows on non-Antigravity providers", () => {
+  assert.equal(
+    remainingPercentFromQuotaWindows(
+      { five_hour: { percentUsed: null } },
+      { provider: "openai", requestedModel: "gpt-4" }
+    ),
+    null
   );
 });
